@@ -1,12 +1,12 @@
 import Cloudflare, { toFile } from 'cloudflare';
-import { Uploadable } from 'cloudflare/uploads';
+import type { ToFileInput, Uploadable } from 'cloudflare/uploads';
 
 export interface WorkerScript {
 	name: string;
 	mainFileName: string;
 	files: {
 		name: string;
-		content: string;
+		content: ToFileInput | PromiseLike<ToFileInput>;
 		type: string;
 	}[];
 }
@@ -31,6 +31,7 @@ interface UploadResponse {
 	messages: any;
 }
 
+// https://developers.cloudflare.com/workers/static-assets/direct-upload/
 export class ScriptUpload {
 	#client: Cloudflare;
 
@@ -44,14 +45,20 @@ export class ScriptUpload {
 		namespace: string,
 		workerName: string,
 		manifest: Record<string, FileMetadata>
-	): Promise<AssetsUploadInfo> {
-		const { buckets, jwt } = await this.#client.workersForPlatforms.dispatch.namespaces.scripts.assetUpload.create(namespace, workerName, {
+	): Promise<AssetsUploadInfo | null> {
+		const result = await this.#client.workersForPlatforms.dispatch.namespaces.scripts.assetUpload.create(namespace, workerName, {
 			account_id: this.accountId,
 			manifest,
 		});
 
+		if (result === null) {
+			return null;
+		}
+
+		const { buckets, jwt } = result;
+
 		if (buckets === undefined || jwt === undefined) {
-			throw new Error('invalid upload response');
+			return null;
 		}
 
 		return { buckets, jwt };
@@ -59,20 +66,29 @@ export class ScriptUpload {
 
 	public async uploadFilesBatch(
 		uploadInfo: AssetsUploadInfo,
-		filesByHash: Map<string, { fileName: string; data: Blob; type: string }>
+		filesByHash: Map<string, { fileName: string; data: Buffer; type: string }>
 	): Promise<string> {
-		const form = new FormData();
+
+		if(uploadInfo.buckets.length === 0) {
+			console.warn("Skipping upload, no files to upload");
+			return uploadInfo.jwt;
+		}
 
 		for (const bucket of uploadInfo.buckets) {
+			const form = new FormData();
+
 			bucket.forEach((fileHash) => {
 				const file = filesByHash.get(fileHash);
+
 				if (!file) {
 					throw new Error('unknown file hash');
 				}
 
+				const base64Data = file.data.toString('base64');
+
 				form.append(
 					fileHash,
-					new File([file.data], fileHash, {
+					new File([base64Data], fileHash, {
 						type: file.type,
 					}),
 					fileHash
@@ -88,8 +104,22 @@ export class ScriptUpload {
 			});
 
 			const data = await response.json<UploadResponse>();
-			if (data && data.result.jwt) {
-				return data.result.jwt;
+			if (data) {
+				if (data.messages) {
+					console.warn(...data.messages);
+				}
+
+				if (!data.success) {
+					if (data.errors) {
+						console.error(...data.errors);
+					}
+					throw new Error('Failed to upload files');
+				}
+
+				if (data.result.jwt) {
+					console.log('Assets Upload success!');
+					return data.result.jwt;
+				}
 			}
 		}
 
@@ -100,7 +130,7 @@ export class ScriptUpload {
 		try {
 			const files: Record<string, Uploadable> = Object.fromEntries(
 				await Promise.all(
-					workerScript.files.map(async (file) => [workerScript.name, await toFile(Buffer.from(file.content), file.name, { type: file.type })])
+					workerScript.files.map(async (file) => [workerScript.name, await toFile(file.content, file.name, { type: file.type })])
 				)
 			);
 
@@ -131,5 +161,4 @@ export class ScriptUpload {
 			throw error;
 		}
 	}
-
 }
