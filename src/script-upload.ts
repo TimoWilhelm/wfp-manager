@@ -1,8 +1,9 @@
 import Cloudflare, { toFile } from 'cloudflare';
+import { ScriptUpdateParams } from 'cloudflare/resources/workers-for-platforms/dispatch/namespaces';
+import { AssetUploadCreateResponse } from 'cloudflare/resources/workers-for-platforms/dispatch/namespaces/scripts';
 import type { ToFileInput, Uploadable } from 'cloudflare/uploads';
 
 export interface WorkerScript {
-	name: string;
 	mainFileName: string;
 	files: {
 		name: string;
@@ -16,20 +17,7 @@ export interface FileMetadata {
 	size: number;
 }
 
-export interface AssetsUploadInfo {
-	buckets: Array<Array<string>>;
-	jwt: string;
-}
-
-interface UploadResponse {
-	result: {
-		jwt: string;
-		buckets: string[][];
-	};
-	success: boolean;
-	errors: any;
-	messages: any;
-}
+export type AssetsUploadInfo = Required<AssetUploadCreateResponse>;
 
 // https://developers.cloudflare.com/workers/static-assets/direct-upload/
 export class ScriptUpload {
@@ -68,9 +56,8 @@ export class ScriptUpload {
 		uploadInfo: AssetsUploadInfo,
 		filesByHash: Map<string, { fileName: string; data: Buffer; type: string }>
 	): Promise<string> {
-
-		if(uploadInfo.buckets.length === 0) {
-			console.warn("Skipping upload, no files to upload");
+		if (uploadInfo.buckets.length === 0) {
+			console.warn('Skipping upload, no files to upload');
 			return uploadInfo.jwt;
 		}
 
@@ -103,7 +90,16 @@ export class ScriptUpload {
 				body: form,
 			});
 
-			const data = await response.json<UploadResponse>();
+			const data = await response.json<{
+				result: {
+					jwt: string;
+					buckets: string[][];
+				};
+				success: boolean;
+				errors: any;
+				messages: any;
+			}>();
+
 			if (data) {
 				if (data.messages) {
 					console.warn(...data.messages);
@@ -126,30 +122,28 @@ export class ScriptUpload {
 		throw new Error('Should have received completion token');
 	}
 
-	public async uploadScript(namespace: string, workerScript: WorkerScript, assetsToken?: string): Promise<void> {
+	public async uploadScript(
+		namespace: string,
+		worker: {
+			name: string;
+			script: WorkerScript;
+		},
+		metadata: Omit<ScriptUpdateParams['metadata'], 'main_module'>
+	): Promise<void> {
 		try {
 			const files: Record<string, Uploadable> = Object.fromEntries(
 				await Promise.all(
-					workerScript.files.map(async (file) => [workerScript.name, await toFile(file.content, file.name, { type: file.type })])
+					worker.script.files.map(async (file) => [worker.name, await toFile(file.content, file.name, { type: file.type })])
 				)
 			);
 
 			// https://developers.cloudflare.com/api/resources/workers/subresources/scripts/methods/update/
-			const script = await this.#client.workersForPlatforms.dispatch.namespaces.scripts.update(namespace, workerScript.name, {
+			const script = await this.#client.workersForPlatforms.dispatch.namespaces.scripts.update(namespace, worker.name, {
 				account_id: this.accountId,
 				// https://developers.cloudflare.com/workers/configuration/multipart-upload-metadata/
 				metadata: {
-					main_module: workerScript.mainFileName,
-					assets: {
-						jwt: assetsToken,
-					},
-					bindings: [
-						{
-							type: 'plain_text',
-							name: 'MESSAGE',
-							text: 'Hello World!',
-						},
-					],
+					main_module: worker.script.mainFileName,
+					...metadata,
 				},
 				files,
 			});
