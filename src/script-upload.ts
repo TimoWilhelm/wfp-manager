@@ -2,6 +2,7 @@ import Cloudflare, { toFile } from 'cloudflare';
 import { ScriptUpdateParams } from 'cloudflare/resources/workers-for-platforms/dispatch/namespaces';
 import { AssetUploadCreateResponse } from 'cloudflare/resources/workers-for-platforms/dispatch/namespaces/scripts';
 import type { ToFileInput, Uploadable } from 'cloudflare/uploads';
+import { required } from './util';
 
 export interface WorkerScript {
 	mainFileName: string;
@@ -17,6 +18,8 @@ export interface FileMetadata {
 	size: number;
 }
 
+export type AssetManifest = Record<`/${string}`, FileMetadata>;
+
 export type AssetsUploadInfo = Required<AssetUploadCreateResponse>;
 
 // https://developers.cloudflare.com/workers/static-assets/direct-upload/
@@ -29,32 +32,18 @@ export class ScriptUpload {
 		});
 	}
 
-	public async createAssetsUpload(
-		namespace: string,
-		workerName: string,
-		manifest: Record<string, FileMetadata>
-	): Promise<AssetsUploadInfo | null> {
+	public async createAssetsUpload(namespace: string, workerName: string, manifest: AssetManifest): Promise<AssetsUploadInfo> {
 		const result = await this.#client.workersForPlatforms.dispatch.namespaces.scripts.assetUpload.create(namespace, workerName, {
 			account_id: this.accountId,
 			manifest,
 		});
 
-		if (result === null) {
-			return null;
-		}
-
-		const { buckets, jwt } = result;
-
-		if (buckets === undefined || jwt === undefined) {
-			return null;
-		}
-
-		return { buckets, jwt };
+		return required(result);
 	}
 
 	public async uploadFilesBatch(
 		uploadInfo: AssetsUploadInfo,
-		filesByHash: Map<string, { fileName: string; data: Buffer; type: string }>
+		filesByHash: Map<string, { fileName: `/${string}`; data: Buffer; type: string }>
 	): Promise<string> {
 		if (uploadInfo.buckets.length === 0) {
 			console.warn('Skipping upload, no files to upload');
@@ -128,7 +117,7 @@ export class ScriptUpload {
 			name: string;
 			script: WorkerScript;
 		},
-		metadata: Omit<ScriptUpdateParams['metadata'], 'main_module'>
+		metadata: Omit<ScriptUpdateParams['metadata'], 'main_module' | 'body_part'>
 	): Promise<void> {
 		try {
 			const files: Record<string, Uploadable> = Object.fromEntries(

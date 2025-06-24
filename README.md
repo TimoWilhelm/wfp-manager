@@ -1,6 +1,8 @@
-# Workers for Platforms - Direct Upload
+# Workers for Platforms Manager
 
-This repository contains a sample project for using the [Direct Uploads API](https://developers.cloudflare.com/workers/static-assets/direct-upload/) for Workers for Platforms.
+This repository contains a sample project for using the [Direct Uploads API](https://developers.cloudflare.com/workers/static-assets/direct-upload/) for Workers for Platforms including [Static Assets](https://developers.cloudflare.com/workers/static-assets/).
+
+It also provisions a D1 Database for the user and adds it as a binding to the user worker.
 
 ## Setup
 

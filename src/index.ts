@@ -1,17 +1,19 @@
 import { Hono } from 'hono';
-import { ScriptUpload } from './script-upload';
+import { AssetManifest, ScriptUpload } from './script-upload';
 import crypto from 'crypto';
+import { Resources } from './resources';
 
 const app = new Hono<{ Bindings: Env }>();
 
 const namespace = 'tiwi';
 const workerName = 'customer-worker-1';
+const user = 'customer-1';
 
 app.get('/', async (c) => {
 	const scriptUpload = new ScriptUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
 
 	const sampleAssetContent = 'Howdy!';
-	const sampleAssetFileName = '/hello_world.txt'; // make sure this is a path beginning with `/`
+	const sampleAssetFileName = '/hello_world.txt'; // make sure this is a valid path beginning with `/`
 	const sampleAssetContentType = 'text/plain';
 
 	const sampleAssetBuffer = Buffer.from(sampleAssetContent);
@@ -22,7 +24,7 @@ app.get('/', async (c) => {
 			hash: sampleAssetHash,
 			size: sampleAssetBuffer.length,
 		},
-	};
+	} satisfies AssetManifest;
 
 	const uploadInfo = await scriptUpload.createAssetsUpload(namespace, workerName, manifest);
 
@@ -53,9 +55,18 @@ app.get('/', async (c) => {
 	const worker = `
 	export default {
 		async fetch(request, env) {
+			const url = new URL(request.url);
+			if (url.pathname === '/sql') {
+				const returnValue = await env.SQLITE.prepare(\`SELECT date('now');\`).run();
+    			return Response.json(returnValue);
+			}
 			return env.ASSETS.fetch(request);
 		}
 	}`;
+
+	// create D1 Database for the worker
+	const resources = new Resources(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
+	const d1 = await resources.getOrCreateD1(user);
 
 	await scriptUpload.uploadScript(
 		namespace,
@@ -73,15 +84,26 @@ app.get('/', async (c) => {
 			},
 		},
 		{
+			tags: [`user:${user}`],
 			assets: {
 				jwt: assetsToken,
 			},
 			bindings: [
 				{
-					name: 'ASSETS',
 					type: 'assets',
+					name: 'ASSETS',
+				},
+				{
+					type: 'd1',
+					name: 'SQLITE',
+					id: d1.uuid,
 				},
 			],
+			observability: {
+				enabled: true,
+			},
+			compatibility_date: '2025-06-20',
+			compatibility_flags: ['nodejs_compat'],
 		}
 	);
 
