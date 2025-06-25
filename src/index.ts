@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { Resources } from './resources';
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
+import { WorkerManagerMcp } from './mcp/worker-manager-mcp';
 
 const responseSchema = z.object({
 	ok: z.boolean(),
@@ -48,6 +49,10 @@ app.onError((err, c) => {
 	);
 });
 
+app.all('/mcp', (c) => {
+	return WorkerManagerMcp.serve('/mcp').fetch(c.req.raw, c.env, c.executionCtx);
+});
+
 app.doc31('/doc', {
 	openapi: '3.1.0',
 	info: {
@@ -59,7 +64,7 @@ app.doc31('/doc', {
 const namespace = 'tiwi';
 const workerName = 'customer-worker-1';
 const user = 'customer-1';
-const userLocationHint = "weur";
+const userLocationHint = 'weur';
 
 app.openapi(
 	createRoute({
@@ -99,8 +104,6 @@ app.openapi(
 	async (c) => {
 		const validatedBody = c.req.valid('json');
 
-		const scriptUpload = new ScriptUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
-
 		/*
 		 * TODO: Here we are simulating uploading assets.
 		 * This should be done by creating an upload and passing the token to the user to upload the assets directly
@@ -120,6 +123,8 @@ app.openapi(
 			},
 		} satisfies AssetManifest;
 
+		const scriptUpload = new ScriptUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
+
 		const uploadInfo = await scriptUpload.createAssetsUpload(namespace, workerName, manifest);
 
 		let assetsToken: string | undefined;
@@ -128,7 +133,7 @@ app.openapi(
 			console.log('Uploading Assets');
 
 			try {
-				assetsToken = await scriptUpload.uploadFilesBatch(
+				assetsToken = await scriptUpload.uploadAssetsBatch(
 					uploadInfo,
 					new Map([
 						[
@@ -150,20 +155,18 @@ app.openapi(
 		const resources = new Resources(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
 		const d1 = await resources.getOrCreateD1(user, userLocationHint);
 
-		await scriptUpload.uploadScript(
+		await scriptUpload.deployWorker(
 			namespace,
+			workerName,
 			{
-				name: workerName,
-				script: {
-					mainFileName: validatedBody.mainFileName,
-					files: validatedBody.files.map((files) => {
-						return {
-							name: files.name,
-							content: Buffer.from(files.content, files.base64 ? 'base64' : 'utf-8'),
-							type: files.type,
-						};
-					}),
-				},
+				mainFileName: validatedBody.mainFileName,
+				files: validatedBody.files.map((files) => {
+					return {
+						name: files.name,
+						content: Buffer.from(files.content, files.base64 ? 'base64' : 'utf-8'),
+						type: files.type,
+					};
+				}),
 			},
 			{
 				tags: [`user:${user}`],

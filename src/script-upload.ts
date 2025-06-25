@@ -39,7 +39,7 @@ export class ScriptUpload {
 		return required(result);
 	}
 
-	public async uploadFilesBatch(
+	public async uploadAssetsBatch(
 		uploadInfo: AssetsUploadInfo,
 		filesByHash: Map<string, { fileName: `/${string}`; data: Buffer; type: string }>
 	): Promise<string> {
@@ -55,7 +55,7 @@ export class ScriptUpload {
 				const file = filesByHash.get(fileHash);
 
 				if (!file) {
-					throw new Error('unknown file hash');
+					throw new Error('Unknown file hash');
 				}
 
 				const base64Data = file.data.toString('base64');
@@ -76,6 +76,10 @@ export class ScriptUpload {
 				},
 				body: form,
 			});
+
+			if (!response.ok) {
+				throw new Error(`Failed to upload files (${response.status}): ${await response.text()}`);
+			}
 
 			const data = await response.json<{
 				result: {
@@ -109,33 +113,31 @@ export class ScriptUpload {
 		throw new Error('Should have received completion token');
 	}
 
-	public async uploadScript(
+	public async deployWorker(
 		namespace: string,
-		worker: {
-			name: string;
-			script: WorkerScript;
-		},
+		workerName: string,
+		worker: WorkerScript,
 		metadata: Omit<Cloudflare.WorkersForPlatforms.Dispatch.Namespaces.Scripts.ScriptUpdateParams['metadata'], 'main_module' | 'body_part'>
-	): Promise<void> {
+	): Promise<Required<Cloudflare.WorkersForPlatforms.Dispatch.Namespaces.Scripts.ScriptUpdateResponse>> {
 		try {
 			const files: Record<string, Uploadable> = Object.fromEntries(
-				await Promise.all(
-					worker.script.files.map(async (file) => [worker.name, await toFile(file.content, file.name, { type: file.type })])
-				)
+				await Promise.all(worker.files.map(async (file) => [file.name, await toFile(file.content, file.name, { type: file.type })]))
 			);
 
 			// https://developers.cloudflare.com/api/resources/workers/subresources/scripts/methods/update/
-			const script = await this.#client.workersForPlatforms.dispatch.namespaces.scripts.update(namespace, worker.name, {
+			const script = await this.#client.workersForPlatforms.dispatch.namespaces.scripts.update(namespace, workerName, {
 				account_id: this.accountId,
 				// https://developers.cloudflare.com/workers/configuration/multipart-upload-metadata/
 				metadata: {
-					main_module: worker.script.mainFileName,
+					main_module: worker.mainFileName,
 					...metadata,
 				},
 				files,
 			});
 			console.log('Script Upload success!');
 			console.log(JSON.stringify(script, null, 2));
+
+			return required(script);
 		} catch (error) {
 			console.error('Script Upload failure!');
 			console.error(error);
