@@ -1,9 +1,17 @@
-import { Hono } from 'hono';
 import { AssetManifest, ScriptUpload } from './script-upload';
 import crypto from 'crypto';
 import { Resources } from './resources';
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
+
+const responseSchema = z.object({
+	ok: z.boolean(),
+	errors: z.array(z.string()),
+});
+
+const errorSchema = responseSchema.extend({
+	ok: z.literal(false),
+});
 
 const app = new OpenAPIHono<{ Bindings: Env }>({
 	strict: true,
@@ -12,8 +20,8 @@ const app = new OpenAPIHono<{ Bindings: Env }>({
 			return c.json(
 				{
 					ok: false,
-					errors: result.error.format(),
-				},
+					errors: result.error.format()._errors,
+				} satisfies z.infer<typeof errorSchema>,
 				422
 			);
 		}
@@ -23,8 +31,9 @@ const app = new OpenAPIHono<{ Bindings: Env }>({
 app.notFound((c) => {
 	return c.json(
 		{
-			message: 'Not Found',
-		},
+			ok: false,
+			errors: ['Not Found'],
+		} satisfies z.infer<typeof errorSchema>,
 		404
 	);
 });
@@ -32,15 +41,25 @@ app.notFound((c) => {
 app.onError((err, c) => {
 	return c.json(
 		{
-			message: err.message,
-		},
+			ok: false,
+			errors: [err.message],
+		} satisfies z.infer<typeof errorSchema>,
 		500
 	);
+});
+
+app.doc31('/doc', {
+	openapi: '3.1.0',
+	info: {
+		version: '1.0.0',
+		title: 'WfP Manager',
+	},
 });
 
 const namespace = 'tiwi';
 const workerName = 'customer-worker-1';
 const user = 'customer-1';
+const userLocationHint = "weur";
 
 app.openapi(
 	createRoute({
@@ -58,6 +77,7 @@ app.openapi(
 									name: z.string(),
 									content: z.string(),
 									type: z.string(),
+									base64: z.boolean().optional().default(false),
 								})
 							),
 						}),
@@ -70,10 +90,7 @@ app.openapi(
 				description: 'OK',
 				content: {
 					'application/json': {
-						schema: z.object({
-							ok: z.boolean(),
-							errors: z.array(z.string()),
-						}),
+						schema: responseSchema,
 					},
 				},
 			},
@@ -131,7 +148,7 @@ app.openapi(
 
 		// create D1 Database for the worker
 		const resources = new Resources(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
-		const d1 = await resources.getOrCreateD1(user);
+		const d1 = await resources.getOrCreateD1(user, userLocationHint);
 
 		await scriptUpload.uploadScript(
 			namespace,
@@ -139,11 +156,13 @@ app.openapi(
 				name: workerName,
 				script: {
 					mainFileName: validatedBody.mainFileName,
-					files: validatedBody.files.map((files) => ({
-						name: files.name,
-						content: Buffer.from(files.content),
-						type: files.type,
-					})),
+					files: validatedBody.files.map((files) => {
+						return {
+							name: files.name,
+							content: Buffer.from(files.content, files.base64 ? 'base64' : 'utf-8'),
+							type: files.type,
+						};
+					}),
 				},
 			},
 			{

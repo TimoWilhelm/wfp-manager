@@ -1,6 +1,4 @@
 import Cloudflare, { toFile } from 'cloudflare';
-import { ScriptUpdateParams } from 'cloudflare/resources/workers-for-platforms/dispatch/namespaces';
-import { AssetUploadCreateResponse } from 'cloudflare/resources/workers-for-platforms/dispatch/namespaces/scripts';
 import type { ToFileInput, Uploadable } from 'cloudflare/uploads';
 import { required } from './util';
 
@@ -20,7 +18,7 @@ export interface FileMetadata {
 
 export type AssetManifest = Record<`/${string}`, FileMetadata>;
 
-export type AssetsUploadInfo = Required<AssetUploadCreateResponse>;
+export type AssetsUploadInfo = Required<Cloudflare.WorkersForPlatforms.Dispatch.Namespaces.Scripts.AssetUpload.AssetUploadCreateResponse>;
 
 // https://developers.cloudflare.com/workers/static-assets/direct-upload/
 export class ScriptUpload {
@@ -117,7 +115,7 @@ export class ScriptUpload {
 			name: string;
 			script: WorkerScript;
 		},
-		metadata: Omit<ScriptUpdateParams['metadata'], 'main_module' | 'body_part'>
+		metadata: Omit<Cloudflare.WorkersForPlatforms.Dispatch.Namespaces.Scripts.ScriptUpdateParams['metadata'], 'main_module' | 'body_part'>
 	): Promise<void> {
 		try {
 			const files: Record<string, Uploadable> = Object.fromEntries(

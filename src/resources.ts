@@ -10,7 +10,10 @@ export class Resources {
 		});
 	}
 
-	async getOrCreateD1(name: string): Promise<Required<Cloudflare.D1Resource.D1>> {
+	async getOrCreateD1(
+		name: string,
+		locationHint?: Cloudflare.D1Resource.Database.DatabaseCreateParams['primary_location_hint']
+	): Promise<Required<Cloudflare.D1Resource.D1>> {
 		try {
 			const existingD1 = await this.#client.d1.database.get(name, { account_id: this.accountId });
 			return required(existingD1);
@@ -19,6 +22,7 @@ export class Resources {
 				const newD1 = await this.#client.d1.database.create({
 					name,
 					account_id: this.accountId,
+					primary_location_hint: locationHint,
 				});
 				return required(newD1);
 			}
