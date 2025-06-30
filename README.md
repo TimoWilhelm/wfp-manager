@@ -29,7 +29,8 @@ content-type: application/json
       "content": <minified worker script>,
       "type": "application/javascript+module"
     }
-  ]
+  ],
+  "assetsToken": "<ASSETS_TOKEN>",
 }
 ```
 

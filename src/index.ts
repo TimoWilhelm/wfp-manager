@@ -51,7 +51,7 @@ app.onError((err, c) => {
 	);
 });
 
-app.doc31('/doc', {
+app.doc31('/openapi', {
 	openapi: '3.1.0',
 	info: {
 		version: '1.0.0',
