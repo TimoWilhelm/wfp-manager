@@ -1,12 +1,12 @@
-import { AssetManifest, ScriptUpload } from './script-upload';
-import crypto from 'crypto';
+import { ScriptUpload } from './script-upload';
 import { Resources } from './resources';
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
+import { prettyJSON } from 'hono/pretty-json';
 
 const responseSchema = z.object({
 	ok: z.boolean(),
-	errors: z.array(z.string()),
+	errors: z.array(z.any()),
 });
 
 const errorSchema = responseSchema.extend({
@@ -17,16 +17,19 @@ const app = new OpenAPIHono<{ Bindings: Env }>({
 	strict: true,
 	defaultHook: (result, c) => {
 		if (!result.success) {
+			console.log(result.error.errors)
 			return c.json(
 				{
 					ok: false,
-					errors: result.error.format()._errors,
+					errors: result.error.errors,
 				} satisfies z.infer<typeof errorSchema>,
 				422
 			);
 		}
 	},
 });
+
+app.use(prettyJSON());
 
 app.notFound((c) => {
 	return c.json(
@@ -59,12 +62,149 @@ app.doc31('/doc', {
 const namespace = 'tiwi';
 const workerName = 'customer-worker-1';
 const user = 'customer-1';
-const userLocationHint = "weur";
+const userLocationHint = 'weur';
 
 app.openapi(
 	createRoute({
 		method: 'post',
-		path: '/upload',
+		path: '/assets',
+		request: {
+			body: {
+				required: true,
+				content: {
+					'application/json': {
+						schema: z.object({
+							filesMetadata: z.array(
+								z.object({
+									fileName: z
+										.string()
+										.startsWith('/')
+										.transform((v) => v as `/${string}`),
+									fileHash: z.string().length(32),
+									fileSize: z.number().max(25 * 1024 * 1024),
+								})
+							),
+						}),
+					},
+				},
+			},
+		},
+		responses: {
+			201: {
+				description: 'Created Asset Upload',
+				content: {
+					'application/json': {
+						schema: responseSchema.extend({
+							uploadInfo: z.object({
+								jwt: z.string(),
+								buckets: z.array(z.array(z.string())),
+							}),
+						}),
+					},
+				},
+			},
+		},
+	}),
+	async (c) => {
+		const { filesMetadata } = c.req.valid('json');
+
+		const manifest = filesMetadata.reduce((acc: Record<string, any>, file) => {
+			acc[file.fileName] = {
+				hash: file.fileHash,
+				size: file.fileSize,
+			};
+			return acc;
+		}, {});
+
+		const scriptUpload = new ScriptUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
+
+		const uploadInfo = await scriptUpload.createAssetsUpload(namespace, workerName, manifest);
+
+		return c.json(
+			{
+				ok: true,
+				uploadInfo,
+				errors: [],
+			},
+			{
+				status: 201,
+			}
+		);
+	}
+);
+
+app.openapi(
+	createRoute({
+		method: 'put',
+		path: '/assets',
+		request: {
+			body: {
+				required: true,
+				content: {
+					'application/json': {
+						schema: z.object({
+							uploadInfo: z.object({
+								jwt: z.string(),
+								buckets: z.array(z.array(z.string())),
+							}),
+							files: z.array(
+								z.object({
+									fileHash: z.string().length(32),
+									fileName: z
+										.string()
+										.startsWith('/')
+										.transform((v) => v as `/${string}`),
+									content: z.string(),
+									contentType: z.string(),
+									base64: z.boolean().optional().default(false),
+								})
+							),
+						}),
+					},
+				},
+			},
+		},
+		responses: {
+			200: {
+				description: 'Assets uploaded successfully',
+				content: {
+					'application/json': {
+						schema: responseSchema,
+					},
+				},
+			},
+		},
+	}),
+	async (c) => {
+		const { uploadInfo, files } = c.req.valid('json');
+
+		const scriptUpload = new ScriptUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
+
+		const fileMap = new Map(
+			files.map((file) => [
+				file.fileHash,
+				{
+					fileName: file.fileName,
+					data: Buffer.from(file.content, file.base64 ? 'base64' : 'utf-8'),
+					type: file.contentType,
+				},
+			])
+		);
+
+		const assetsToken = await scriptUpload.uploadAssetsBatch(uploadInfo, fileMap);
+
+		return c.json({
+			ok: true,
+			jwt: assetsToken,
+			errors: [],
+		});
+	}
+);
+
+app.openapi(
+	createRoute({
+		method: 'post',
+		path: '/worker',
 		request: {
 			body: {
 				required: true,
@@ -80,6 +220,8 @@ app.openapi(
 									base64: z.boolean().optional().default(false),
 								})
 							),
+							assetsToken: z.string().optional(),
+							singlePageApp: z.boolean().optional().default(false),
 						}),
 					},
 				},
@@ -87,7 +229,7 @@ app.openapi(
 		},
 		responses: {
 			200: {
-				description: 'OK',
+				description: 'Worker deployed successfully',
 				content: {
 					'application/json': {
 						schema: responseSchema,
@@ -97,79 +239,37 @@ app.openapi(
 		},
 	}),
 	async (c) => {
-		const validatedBody = c.req.valid('json');
+		const { files, mainFileName, assetsToken, singlePageApp } = c.req.valid('json');
 
-		const scriptUpload = new ScriptUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
-
-		/*
-		 * TODO: Here we are simulating uploading assets.
-		 * This should be done by creating an upload and passing the token to the user to upload the assets directly
-		 */
-
-		const sampleAssetContent = 'Howdy!';
-		const sampleAssetFileName = '/hello_world.txt'; // make sure this is a valid path beginning with `/`
-		const sampleAssetContentType = 'text/plain';
-
-		const sampleAssetBuffer = Buffer.from(sampleAssetContent);
-		const sampleAssetHash = crypto.createHash('sha256').update(sampleAssetContent).digest('hex').slice(0, 32);
-
-		const manifest = {
-			[sampleAssetFileName]: {
-				hash: sampleAssetHash,
-				size: sampleAssetBuffer.length,
-			},
-		} satisfies AssetManifest;
-
-		const uploadInfo = await scriptUpload.createAssetsUpload(namespace, workerName, manifest);
-
-		let assetsToken: string | undefined;
-
-		if (uploadInfo !== null) {
-			console.log('Uploading Assets');
-
-			try {
-				assetsToken = await scriptUpload.uploadFilesBatch(
-					uploadInfo,
-					new Map([
-						[
-							sampleAssetHash,
-							{
-								fileName: sampleAssetFileName,
-								data: sampleAssetBuffer,
-								type: sampleAssetContentType,
-							},
-						],
-					])
-				);
-			} catch (error) {
-				console.error(error);
-			}
-		}
-
-		// create D1 Database for the worker
+		// Create D1 Database for the worker
 		const resources = new Resources(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
 		const d1 = await resources.getOrCreateD1(user, userLocationHint);
 
-		await scriptUpload.uploadScript(
+		const scriptUpload = new ScriptUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
+
+		await scriptUpload.deployWorker(
 			namespace,
+			workerName,
 			{
-				name: workerName,
-				script: {
-					mainFileName: validatedBody.mainFileName,
-					files: validatedBody.files.map((files) => {
-						return {
-							name: files.name,
-							content: Buffer.from(files.content, files.base64 ? 'base64' : 'utf-8'),
-							type: files.type,
-						};
-					}),
-				},
+				mainFileName,
+				files: files.map((files) => {
+					return {
+						name: files.name,
+						content: Buffer.from(files.content, files.base64 ? 'base64' : 'utf-8'),
+						type: files.type,
+					};
+				}),
 			},
 			{
 				tags: [`user:${user}`],
-				assets: {
-					jwt: assetsToken,
-				},
+				assets: assetsToken
+					? {
+							config: {
+								not_found_handling: singlePageApp ? 'single-page-application' : undefined,
+							},
+							jwt: assetsToken,
+					  }
+					: undefined,
 				bindings: [
 					{
 						type: 'assets',
