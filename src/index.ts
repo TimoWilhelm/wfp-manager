@@ -1,12 +1,12 @@
-import { ScriptUpload } from './script-upload';
+import { WorkerUpload } from './worker-upload';
 import { Resources } from './resources';
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi';
-import { z } from 'zod';
+import * as z from 'zod/v4';
 import { prettyJSON } from 'hono/pretty-json';
 
 const responseSchema = z.object({
 	ok: z.boolean(),
-	errors: z.array(z.any()),
+	errors: z.any().optional(),
 });
 
 const errorSchema = responseSchema.extend({
@@ -17,11 +17,13 @@ const app = new OpenAPIHono<{ Bindings: Env }>({
 	strict: true,
 	defaultHook: (result, c) => {
 		if (!result.success) {
-			console.log(result.error.errors)
+			const errors = z.treeifyError(result.error);
+
+			console.log(errors);
 			return c.json(
 				{
 					ok: false,
-					errors: result.error.errors,
+					errors,
 				} satisfies z.infer<typeof errorSchema>,
 				422
 			);
@@ -35,7 +37,7 @@ app.notFound((c) => {
 	return c.json(
 		{
 			ok: false,
-			errors: ['Not Found'],
+			errors: { message: 'Not Found' },
 		} satisfies z.infer<typeof errorSchema>,
 		404
 	);
@@ -45,7 +47,7 @@ app.onError((err, c) => {
 	return c.json(
 		{
 			ok: false,
-			errors: [err.message],
+			errors: err,
 		} satisfies z.infer<typeof errorSchema>,
 		500
 	);
@@ -59,11 +61,6 @@ app.doc31('/openapi', {
 	},
 });
 
-const namespace = 'tiwi';
-const workerName = 'customer-worker-1';
-const user = 'customer-1';
-const userLocationHint = 'weur';
-
 app.openapi(
 	createRoute({
 		method: 'post',
@@ -74,6 +71,8 @@ app.openapi(
 				content: {
 					'application/json': {
 						schema: z.object({
+							namespace: z.string(),
+							workerName: z.string(),
 							filesMetadata: z.array(
 								z.object({
 									fileName: z
@@ -106,7 +105,7 @@ app.openapi(
 		},
 	}),
 	async (c) => {
-		const { filesMetadata } = c.req.valid('json');
+		const { namespace, workerName, filesMetadata } = c.req.valid('json');
 
 		const manifest = filesMetadata.reduce((acc: Record<string, any>, file) => {
 			acc[file.fileName] = {
@@ -116,15 +115,14 @@ app.openapi(
 			return acc;
 		}, {});
 
-		const scriptUpload = new ScriptUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
+		const workerUpload = new WorkerUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
 
-		const uploadInfo = await scriptUpload.createAssetsUpload(namespace, workerName, manifest);
+		const uploadInfo = await workerUpload.createAssetsUpload(namespace, workerName, manifest);
 
 		return c.json(
 			{
 				ok: true,
 				uploadInfo,
-				errors: [],
 			},
 			{
 				status: 201,
@@ -156,7 +154,7 @@ app.openapi(
 										.transform((v) => v as `/${string}`),
 									content: z.string(),
 									contentType: z.string(),
-									base64: z.boolean().optional().default(false),
+									base64: z.boolean().default(false),
 								})
 							),
 						}),
@@ -178,7 +176,7 @@ app.openapi(
 	async (c) => {
 		const { uploadInfo, files } = c.req.valid('json');
 
-		const scriptUpload = new ScriptUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
+		const workerUpload = new WorkerUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
 
 		const fileMap = new Map(
 			files.map((file) => [
@@ -191,12 +189,11 @@ app.openapi(
 			])
 		);
 
-		const assetsToken = await scriptUpload.uploadAssetsBatch(uploadInfo, fileMap);
+		const assetsToken = await workerUpload.uploadAssetsBatch(uploadInfo, fileMap);
 
 		return c.json({
 			ok: true,
 			jwt: assetsToken,
-			errors: [],
 		});
 	}
 );
@@ -211,17 +208,21 @@ app.openapi(
 				content: {
 					'application/json': {
 						schema: z.object({
+							namespace: z.string(),
+							workerName: z.string(),
 							mainFileName: z.string(),
 							files: z.array(
 								z.object({
 									name: z.string(),
 									content: z.string(),
 									type: z.string(),
-									base64: z.boolean().optional().default(false),
+									base64: z.boolean().default(false),
 								})
 							),
 							assetsToken: z.string().optional(),
-							singlePageApp: z.boolean().optional().default(false),
+							singlePageApp: z.boolean().default(false),
+							d1Location: z.enum(['wnam', 'enam', 'weur', 'eeur', 'apac', 'oc']).default('weur'),
+							tags: z.array(z.string().regex(/^[^:]+:.+$/, 'Tags must be in format "key:value"')).default([]),
 						}),
 					},
 				},
@@ -239,15 +240,15 @@ app.openapi(
 		},
 	}),
 	async (c) => {
-		const { files, mainFileName, assetsToken, singlePageApp } = c.req.valid('json');
+		const { namespace, workerName, files, mainFileName, assetsToken, singlePageApp, d1Location, tags } = c.req.valid('json');
 
 		// Create D1 Database for the worker
 		const resources = new Resources(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
-		const d1 = await resources.getOrCreateD1(user, userLocationHint);
+		const d1 = await resources.getOrCreateD1(`${namespace}-${workerName}`, d1Location);
 
-		const scriptUpload = new ScriptUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
+		const workerUpload = new WorkerUpload(c.env.CLOUDFLARE_ACCOUNT_ID, c.env.CLOUDFLARE_API_TOKEN);
 
-		await scriptUpload.deployWorker(
+		await workerUpload.deployWorker(
 			namespace,
 			workerName,
 			{
@@ -261,7 +262,7 @@ app.openapi(
 				}),
 			},
 			{
-				tags: [`user:${user}`],
+				tags,
 				assets: assetsToken
 					? {
 							config: {
@@ -291,7 +292,6 @@ app.openapi(
 
 		return c.json({
 			ok: true,
-			errors: [],
 		});
 	}
 );

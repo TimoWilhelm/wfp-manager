@@ -2,7 +2,7 @@ import Cloudflare, { toFile } from 'cloudflare';
 import type { ToFileInput, Uploadable } from 'cloudflare/uploads';
 import { required } from './util';
 
-export interface WorkerScript {
+export interface WorkerFiles {
 	mainFileName: string;
 	files: {
 		name: string;
@@ -21,7 +21,7 @@ export type AssetManifest = Record<`/${string}`, FileMetadata>;
 export type AssetsUploadInfo = Required<Cloudflare.WorkersForPlatforms.Dispatch.Namespaces.Scripts.AssetUpload.AssetUploadCreateResponse>;
 
 // https://developers.cloudflare.com/workers/static-assets/direct-upload/
-export class ScriptUpload {
+export class WorkerUpload {
 	#client: Cloudflare;
 
 	constructor(private readonly accountId: string, apiToken: string) {
@@ -116,13 +116,11 @@ export class ScriptUpload {
 	public async deployWorker(
 		namespace: string,
 		workerName: string,
-		worker: WorkerScript,
+		worker: WorkerFiles,
 		metadata: Omit<Cloudflare.WorkersForPlatforms.Dispatch.Namespaces.Scripts.ScriptUpdateParams['metadata'], 'main_module' | 'body_part'>
 	): Promise<Required<Cloudflare.WorkersForPlatforms.Dispatch.Namespaces.Scripts.ScriptUpdateResponse>> {
 		try {
-			const files: Record<string, Uploadable> = Object.fromEntries(
-				await Promise.all(worker.files.map(async (file) => [file.name, await toFile(file.content, file.name, { type: file.type })]))
-			);
+			const files = await Promise.all(worker.files.map((file) => toFile(file.content, file.name, { type: file.type })));
 
 			// https://developers.cloudflare.com/api/resources/workers/subresources/scripts/methods/update/
 			const script = await this.#client.workersForPlatforms.dispatch.namespaces.scripts.update(namespace, workerName, {
