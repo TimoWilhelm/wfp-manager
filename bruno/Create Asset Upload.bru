@@ -1,0 +1,29 @@
+meta {
+  name: Create Asset Upload
+  type: http
+  seq: 1
+}
+
+post {
+  url: http://127.0.0.1:8787/assets
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "namespace": "tiwi",
+    "workerName": "customer-worker-1",
+    "filesMetadata": [
+      {
+        "fileName": "/hello.txt",
+        "fileHash": "4f1c1af44620d531446ceef93f222222",
+        "fileSize": 12
+      }
+    ]
+  }
+}
+
+settings {
+  encodeUrl: true
+}

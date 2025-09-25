@@ -1,0 +1,37 @@
+meta {
+  name: Upload Asset
+  type: http
+  seq: 3
+}
+
+put {
+  url: http://127.0.0.1:8787/assets
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "uploadInfo": {
+      "jwt": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL2FwaS53b3JrZXJzLmNsb3VkZmxhcmUuY29tIiwiYXVkIjoiaHR0cHM6Ly9hcGkud29ya2Vycy5jbG91ZGZsYXJlLmNvbSIsImV4cCI6MTc1ODgzMDYwNywibmJmIjoxNzU4ODI3MDA3LCJpYXQiOjE3NTg4MjcwMDcsIm1hbmlmZXN0X2lkIjoiMmFjOGVhOTAtM2ZkYy00ODZhLTllOWYtODk4ZjE4NWNiNTFkIn0.iF2-stSBH_BRntkh-bbezv69HyrXETCDbRuAGEEv4a49t5gGZgG11yX_tdOrvp8MrZNsc7STWWlxm_QJMfyzCg",
+      "buckets": [
+        [
+          "4f1c1af44620d531446ceef93f222222"
+        ]
+      ]
+    },
+    "files": [
+      {
+        "fileHash": "4f1c1af44620d531446ceef93f222222",
+        "fileName": "/hello.txt",
+        "content": "Hello World",
+        "contentType": "text/plain",
+        "base64": false
+      }
+    ]
+  }
+}
+
+settings {
+  encodeUrl: true
+}
